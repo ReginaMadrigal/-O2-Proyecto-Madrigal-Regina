@@ -71,87 +71,121 @@ Además de generar estos puntos y calcular las ubicaciones óptimas para los dre
 import numpy as np
 import matplotlib.pyplot as plt
 import geojson
-from math import radians, tan, sin, cos
+from math import radians, tan, sin, cos, pi
+from pyproj import Proj, transform
+
+def solicitar_float(mensaje):
+    while True:
+        try:
+            return float(input(mensaje))
+        except ValueError:
+            print("Por favor, ingrese un número válido.")
+
+def solicitar_direccion(mensaje):
+    while True:
+        direccion = input(mensaje).strip().lower()
+        if direccion in ["izquierda", "derecha"]:
+            return direccion
+        else:
+            print("Por favor, ingrese 'izquierda' o 'derecha'.")
 
 # Paso 1: Recibir datos del usuario
-velocidad_promedio = float(input("Ingrese la velocidad promedio en km/h: "))
-precipitacion_promedio = float(input("Ingrese la precipitación promedio en mm/h: "))
-tipo_terreno = input("Ingrese el tipo de terreno (llano, montañoso, colina): ").strip().lower()
+distancia_total = solicitar_float("Ingrese la distancia total de la curva en metros: ")
+radio_curvatura = solicitar_float("Ingrese el radio de curvatura en metros: ")
+inclinacion_transversal = solicitar_float("Ingrese el ángulo de inclinación transversal en grados: ")
+pendiente_longitudinal = solicitar_float("Ingrese la pendiente longitudinal en porcentaje: ")
+direccion_curva = solicitar_direccion("Ingrese la dirección de la curva (izquierda/derecha): ")
+num_drenajes = int(input("Ingrese el número de drenajes que desea colocar: "))
 
-# Paso 2: Definir funciones para cálculos
-def calcular_inclinacion(precipitacion, terreno):
-    # Ajustar la inclinación basada en la precipitación y el tipo de terreno
-    if terreno == "llano":
-        inclinacion_base = 1  # porcentaje mínimo de inclinación
-    elif terreno == "montañoso":
-        inclinacion_base = 4  # mayor inclinación para terrenos montañosos
-    elif terreno == "colina":
-        inclinacion_base = 2.5  # inclinación para colinas
-    else:
-        inclinacion_base = 2  # valor por defecto
+# Proyecciones
+proyeccion_local = Proj(proj="aeqd", lat_0=0, lon_0=0)  # Proyección local centrada en (0, 0)
+proyeccion_global = Proj(proj="latlong", datum="WGS84")  # WGS84 global
 
-    inclinacion = inclinacion_base + (precipitacion / 200)  # Ajuste basado en precipitación
-    return min(inclinacion, 15)  # Limitar la inclinación máxima al 15%
-
-def calcular_radio_curvatura(velocidad):
-    # Fórmula simplificada para calcular el radio de curvatura seguro (en metros)
-    # Usando la fórmula: R = V^2 / (g * (e + f))
-    # Donde V es la velocidad (m/s), g es la gravedad (9.81 m/s^2), e es peralte, f es coeficiente de fricción
-    velocidad_ms = velocidad / 3.6  # Convertir km/h a m/s
-    g = 9.81
-    e = 0.1  # Asumimos un peralte del 10%
-    f = 0.2  # Coeficiente de fricción típico
-
-    radio = velocidad_ms**2 / (g * (e + f))
-    return max(radio, 20)  # Limitar el radio mínimo a 20 metros por seguridad
-
-# Paso 3: Calcular inclinación y radio de curvatura
-inclinacion = calcular_inclinacion(precipitacion_promedio, tipo_terreno)
-radio_curvatura = calcular_radio_curvatura(velocidad_promedio)
-
-print(f"La inclinación recomendada es: {inclinacion:.2f}%")
-print(f"El radio de curvatura recomendado es: {radio_curvatura:.2f} metros")
-print(f"Tipo de terreno: {tipo_terreno.capitalize()}")
-print(f"Velocidad promedio: {velocidad_promedio:.2f} km/h")
-print(f"Precipitación promedio: {precipitacion_promedio:.2f} mm/h")
-print(f"Número de puntos en la curva: 50")
-
-# Paso 4: Crear un GeoJSON para representar la curva
-def generar_curva_geojson(radio, inclinacion, num_puntos=50):
-    # Generar puntos para representar la curva
+# Paso 2: Generar los puntos de la curva en coordenadas locales
+def generar_curva(radio, distancia, direccion, num_puntos=100):
+    angulo_total = (distancia / (2 * pi * radio)) * 360  # Convertir la distancia a ángulo en grados
+    angulos = np.linspace(0, radians(angulo_total), num_puntos)
     puntos = []
-    for i in range(num_puntos):
-        angulo = (i / (num_puntos - 1)) * radians(90)  # Dividir la curva en 90 grados
-        x = radio * (1 - cos(angulo))  # Coordenada x basada en el radio y el ángulo
-        y = radio * sin(angulo) * tan(radians(inclinacion))  # Coordenada y ajustada por la inclinación
+    for angulo in angulos:
+        x = radio * sin(angulo)
+        y = radio * (1 - cos(angulo))
+        y += pendiente_longitudinal / 100 * x  # Ajustar por pendiente longitudinal
+        if direccion == "izquierda":
+            x = -x  # Invertir la dirección
         puntos.append([x, y])
     return puntos
 
-coordenadas = generar_curva_geojson(radio_curvatura, inclinacion)
+coordenadas_locales = generar_curva(radio_curvatura, distancia_total, direccion_curva)
 
-curva_geojson = geojson.LineString(coordenadas)
+# Paso 3: Convertir las coordenadas locales a latitud y longitud
+def convertir_a_latlon(coordenadas_locales):
+    coordenadas_globales = [
+        transform(proyeccion_local, proyeccion_global, x, y) for x, y in coordenadas_locales
+    ]
+    return coordenadas_globales
+
+coordenadas_globales = convertir_a_latlon(coordenadas_locales)
+
+# Exportar curva a GeoJSON
+curva_geojson = geojson.LineString(coordenadas_globales)
 with open('curva.geojson', 'w') as f:
     geojson.dump(curva_geojson, f)
 
-# Paso 5: Visualizar la curva usando matplotlib
-x, y = zip(*coordenadas)
+# Paso 4: Colocar drenajes hacia el centro de la curva basado en flujo
+def colocar_drenajes_centro(coordenadas_globales, num_drenajes):
+    # Identificar el tercio central de la curva
+    tercio_inicio = len(coordenadas_globales) // 3
+    tercio_final = 2 * len(coordenadas_globales) // 3
+    coordenadas_centrales = coordenadas_globales[tercio_inicio:tercio_final]
+
+    # Calcular flujo basado en proximidad al centro geométrico
+    flujo = [
+        (p[0], p[1], abs(p[1])) for p in coordenadas_centrales
+    ]
+    flujo_ordenado = sorted(flujo, key=lambda punto: punto[2])
+    puntos_drenaje = [[p[0], p[1]] for p in flujo_ordenado[:num_drenajes]]
+    return puntos_drenaje
+
+puntos_drenaje = colocar_drenajes_centro(coordenadas_globales, num_drenajes)
+
+# Exportar drenajes a GeoJSON
+drenajes_geojson = geojson.MultiPoint(puntos_drenaje)
+with open('drenajes.geojson', 'w') as f:
+    geojson.dump(drenajes_geojson, f)
+
+# Paso 5: Visualizar la curva con matplotlib
+x, y = zip(*[transform(proyeccion_global, proyeccion_local, lon, lat) for lon, lat in coordenadas_globales])
+drenaje_x, drenaje_y = zip(*[transform(proyeccion_global, proyeccion_local, lon, lat) for lon, lat in puntos_drenaje])
+
+# Simular flujo de agua
+def simular_flujo(x, y, inclinacion_trans, num_lineas=10):
+    for i in range(num_lineas):
+        flujo_x = [xi for xi in x]
+        flujo_y = [yi - (i * 0.1) for yi in y]  # Simular descenso en flujo
+        plt.plot(flujo_x, flujo_y, linestyle='--', alpha=0.5, color='cyan', label='Flujo de agua' if i == 0 else "")
 
 plt.figure(figsize=(12, 8))
 plt.plot(x, y, label='Curva diseñada', color='b', linewidth=2)
+plt.scatter(drenaje_x, drenaje_y, color='r', marker='o', s=100, label='Puntos de Drenaje')
+simular_flujo(x, y, inclinacion_transversal)
+
 plt.xlabel('Distancia horizontal (m)')
 plt.ylabel('Distancia vertical (m)')
-plt.title('Diseño de Curva para Flujo de Agua y Seguridad Vial')
+plt.title(f'Diseño de Curva con Coordenadas Geográficas y Flujo de Agua')
 plt.legend()
 plt.grid(True, linestyle='--', alpha=0.7)
 plt.axhline(0, color='black', linewidth=0.5)
 plt.axvline(0, color='black', linewidth=0.5)
 plt.show()
 
-# Paso 6: Información adicional sobre la curva
-longitud_curva = sum(np.sqrt((x[i+1] - x[i])*2 + (y[i+1] - y[i])*2) for i in range(len(x) - 1))
-print(f"Longitud total de la curva: {longitud_curva:.2f} metros")
-pendiente_media = (y[-1] - y[0]) / (x[-1] - x[0]) * 100
-print(f"Pendiente media de la curva: {pendiente_media:.2f}%")
+# Paso 6: Información adicional de la curva
+print(f"\n=== Información de la Curva ===")
+print(f"Longitud total de la curva: {distancia_total:.2f} metros")
+print(f"Radio de curvatura: {radio_curvatura:.2f} metros")
+print(f"Pendiente longitudinal: {pendiente_longitudinal:.2f}%")
+print(f"Número de drenajes ingresados: {num_drenajes}")
+print(f"Puntos de drenaje (coordenadas geográficas): {puntos_drenaje}")
+
 
 ## Resultados
 Comenzando con que se generó una representación geométrica de la curva vial en función de los datos ingresados, incluyendo su longitud, radio de curvatura, inclinación transversal y pendiente longitudinal. Esto permitió visualizar de forma clara la forma final de la curva y su perfil.
@@ -161,7 +195,7 @@ Además, se identificaron ubicaciones óptimas para la colocación de drenajes, 
 A estos resultados cuantitativos y espaciales se sumó la generación de un gráfico que ilustra tanto la curva como la posición de los drenajes y el flujo de agua simulado. Esta representación visual facilita la comprensión del problema y la toma de decisiones, ya que brinda una forma intuitiva de analizar la distribución del agua sobre la superficie vial.
 
 Finalmente, el código también proporciona una salida textual con información detallada de todos los parámetros ingresados, los valores calculados y las coordenadas seleccionadas para los drenajes. Esta documentación complementa la visualización al ofrecer datos concretos y verificables. En conjunto, los resultados obtenidos permiten una evaluación fundamentada y orientan pasos futuros en el diseño y mantenimiento de la vía.
-![image](https://github.com/user-attachments/assets/94c3a7c5-34b8-4c41-9a5a-db279bfc9ccf)
+![image](https://github.com/user-attachments/assets/03767c0d-10e5-4402-b226-bc4f010dd285)
 ![image](https://github.com/user-attachments/assets/f1c47971-9388-4f85-a098-64fa36d9b71a)
 
 ## Conclusiones
