@@ -1,6 +1,6 @@
-# O2 Proyecto - Curva Carretera Colima-Los Potrillos
+Cálculo de incliación, caso: "Curva Carretera Colima-Los Potrillos"
 
-**Autores:** **Regina Patricia Madrigal Larios**
+**Autor:** **Regina Patricia Madrigal Larios**
 
 ## Introducción
 El presente reporte tiene por objetivo analizar, proponer y sustentar la necesidad de llevar a cabo una renovación integral de una curva particularmente peligrosa ubicada en la carretera Colima–Los Potrillos. Esta sección vial ha sido identificada como punto crítico debido a varios factores: la acumulación frecuente de agua pluvial, la falta de un adecuado sistema de drenaje, la mala visibilidad en condiciones climáticas adversas y la existencia de un trazo geométrico que dificulta la correcta maniobra de los vehículos que transitan por la zona.
