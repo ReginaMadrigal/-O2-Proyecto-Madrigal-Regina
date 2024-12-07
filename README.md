@@ -72,7 +72,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import geojson
 from math import radians, tan, sin, cos, pi
-from pyproj import Proj, transform
 
 def solicitar_float(mensaje):
     while True:
@@ -89,75 +88,60 @@ def solicitar_direccion(mensaje):
         else:
             print("Por favor, ingrese 'izquierda' o 'derecha'.")
 
-# Paso 1: Recibir datos del usuario
+# Paso 1: Lectura proporcionada del usuario
 distancia_total = solicitar_float("Ingrese la distancia total de la curva en metros: ")
 radio_curvatura = solicitar_float("Ingrese el radio de curvatura en metros: ")
 inclinacion_transversal = solicitar_float("Ingrese el ángulo de inclinación transversal en grados: ")
 pendiente_longitudinal = solicitar_float("Ingrese la pendiente longitudinal en porcentaje: ")
 direccion_curva = solicitar_direccion("Ingrese la dirección de la curva (izquierda/derecha): ")
-num_drenajes = int(input("Ingrese el número de drenajes que desea colocar: "))
+num_drenajes = int(input("Ingrese el número de drenajes que desea colocar (use su criterio basado en el nivel de acumulación de agua): "))
 
-# Proyecciones
-proyeccion_local = Proj(proj="aeqd", lat_0=0, lon_0=0)  # Proyección local centrada en (0, 0)
-proyeccion_global = Proj(proj="latlong", datum="WGS84")  # WGS84 global
-
-# Paso 2: Generar los puntos de la curva en coordenadas locales
-def generar_curva(radio, distancia, direccion, num_puntos=100):
+# Paso 2: Puntos de la curva
+def generar_curva(radio, distancia, direccion, inclinacion_trans, pendiente, num_puntos=100):
     angulo_total = (distancia / (2 * pi * radio)) * 360  # Convertir la distancia a ángulo en grados
     angulos = np.linspace(0, radians(angulo_total), num_puntos)
     puntos = []
     for angulo in angulos:
         x = radio * sin(angulo)
         y = radio * (1 - cos(angulo))
-        y += pendiente_longitudinal / 100 * x  # Ajustar por pendiente longitudinal
+        y += pendiente / 100 * x  # Ajustar por pendiente longitudinal
         if direccion == "izquierda":
             x = -x  # Invertir la dirección
         puntos.append([x, y])
     return puntos
 
-coordenadas_locales = generar_curva(radio_curvatura, distancia_total, direccion_curva)
+coordenadas = generar_curva(radio_curvatura, distancia_total, direccion_curva, inclinacion_transversal, pendiente_longitudinal)
 
-# Paso 3: Convertir las coordenadas locales a latitud y longitud
-def convertir_a_latlon(coordenadas_locales):
-    coordenadas_globales = [
-        transform(proyeccion_local, proyeccion_global, x, y) for x, y in coordenadas_locales
-    ]
-    return coordenadas_globales
-
-coordenadas_globales = convertir_a_latlon(coordenadas_locales)
-
-# Exportar curva a GeoJSON
-curva_geojson = geojson.LineString(coordenadas_globales)
+curva_geojson = geojson.LineString(coordenadas)
 with open('curva.geojson', 'w') as f:
     geojson.dump(curva_geojson, f)
 
-# Paso 4: Colocar drenajes hacia el centro de la curva basado en flujo
-def colocar_drenajes_centro(coordenadas_globales, num_drenajes):
-    # Identificar el tercio central de la curva
-    tercio_inicio = len(coordenadas_globales) // 3
-    tercio_final = 2 * len(coordenadas_globales) // 3
-    coordenadas_centrales = coordenadas_globales[tercio_inicio:tercio_final]
+# Paso 3: Colocar drenajes de la curva basado en flujo del agua
 
-    # Calcular flujo basado en proximidad al centro geométrico
+def colocar_drenajes_centro(coordenadas, inclinacion_trans, pendiente_long, num_drenajes):
+    # Identificar el tercio central de la curva
+    tercio_inicio = len(coordenadas) // 3
+    tercio_final = 2 * len(coordenadas) // 3
+    coordenadas_centrales = coordenadas[tercio_inicio:tercio_final]
+
+    # Calcular flujo hacia el centro combinando inclinación transversal y pendiente longitudinal
     flujo = [
-        (p[0], p[1], abs(p[1])) for p in coordenadas_centrales
+        (punto[0], punto[1], abs(tan(radians(inclinacion_trans)) * punto[0] + pendiente_long / 100 * punto[0] - punto[1]))
+        for punto in coordenadas_centrales
     ]
+    # Ordenar por cercanía al flujo central
     flujo_ordenado = sorted(flujo, key=lambda punto: punto[2])
+    # Seleccionar los puntos para los drenajes
     puntos_drenaje = [[p[0], p[1]] for p in flujo_ordenado[:num_drenajes]]
     return puntos_drenaje
 
-puntos_drenaje = colocar_drenajes_centro(coordenadas_globales, num_drenajes)
+puntos_drenaje = colocar_drenajes_centro(coordenadas, inclinacion_transversal, pendiente_longitudinal, num_drenajes)
 
-# Exportar drenajes a GeoJSON
-drenajes_geojson = geojson.MultiPoint(puntos_drenaje)
-with open('drenajes.geojson', 'w') as f:
-    geojson.dump(drenajes_geojson, f)
+# Paso 4: Visualizar curva con matplotlib
+x, y = zip(*coordenadas)
+drenaje_x, drenaje_y = zip(*puntos_drenaje)
 
-# Paso 5: Visualizar la curva con matplotlib
-x, y = zip(*[transform(proyeccion_global, proyeccion_local, lon, lat) for lon, lat in coordenadas_globales])
-drenaje_x, drenaje_y = zip(*[transform(proyeccion_global, proyeccion_local, lon, lat) for lon, lat in puntos_drenaje])
-
-# Simular flujo de agua
+# Simulacion del flujo del agua 
 def simular_flujo(x, y, inclinacion_trans, num_lineas=10):
     for i in range(num_lineas):
         flujo_x = [xi for xi in x]
@@ -169,22 +153,35 @@ plt.plot(x, y, label='Curva diseñada', color='b', linewidth=2)
 plt.scatter(drenaje_x, drenaje_y, color='r', marker='o', s=100, label='Puntos de Drenaje')
 simular_flujo(x, y, inclinacion_transversal)
 
+# Informacion añadida al grafico con la libreria matplotlib
+info_text = (
+    f"Distancia total: {distancia_total:.2f} m\n"
+    f"Radio de curvatura: {radio_curvatura:.2f} m\n"
+    f"Pendiente longitudinal: {pendiente_longitudinal:.2f}%\n"
+    f"Inclinación transversal: {inclinacion_transversal:.2f}°\n"
+    f"Dirección: {direccion_curva.capitalize()}\n"
+    f"Número de drenajes: {num_drenajes}"
+)
+plt.gcf().text(0.15, 0.85, info_text, fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
+
 plt.xlabel('Distancia horizontal (m)')
 plt.ylabel('Distancia vertical (m)')
-plt.title(f'Diseño de Curva con Coordenadas Geográficas y Flujo de Agua')
+plt.title(f'Diseño de Curva con Drenajes\nRadio: {radio_curvatura:.2f} m, Pendiente: {pendiente_longitudinal:.2f}%')
 plt.legend()
 plt.grid(True, linestyle='--', alpha=0.7)
 plt.axhline(0, color='black', linewidth=0.5)
 plt.axvline(0, color='black', linewidth=0.5)
 plt.show()
 
-# Paso 6: Información adicional de la curva
+# Paso 5: Información adicional de la curva
+longitud_curva = distancia_total
 print(f"\n=== Información de la Curva ===")
-print(f"Longitud total de la curva: {distancia_total:.2f} metros")
+print(f"Dirección de la curva: {direccion_curva.capitalize()}")
+print(f"Longitud total de la curva: {longitud_curva:.2f} metros")
 print(f"Radio de curvatura: {radio_curvatura:.2f} metros")
 print(f"Pendiente longitudinal: {pendiente_longitudinal:.2f}%")
-print(f"Número de drenajes ingresados: {num_drenajes}")
-print(f"Puntos de drenaje (coordenadas geográficas): {puntos_drenaje}")
+print(f"Número de drenajes ingresados: {num_drenajes} (Colocados hacia el centro de la curva considerando el flujo)")
+print(f"Puntos de drenaje (coordenadas): {puntos_drenaje}")
 
 
 ## Resultados
